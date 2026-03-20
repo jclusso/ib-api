@@ -262,7 +262,10 @@ module IB
           initialize_order_handling!   unless old_workflowstate != "account_based_orderflow"
         end
       end
-    rescue Errno::ECONNRESET, Errno::ECONNREFUSED, Errno::EHOSTUNREACH, IB::Error => e
+    rescue => e
+      # Close leaked socket from failed try_connection! handshake
+      socket&.close rescue nil
+      @connected = false
       logger.error "Reconnect failed: #{e.message}. Will retry on next socket error."
     end
 
