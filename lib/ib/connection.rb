@@ -257,11 +257,13 @@ module IB
         try_connection!
       else
         activate_managed_accounts!
-        unless old_workflowstate == 'gateway_mode' 
-          initialize_managed_accounts! 
+        unless old_workflowstate == 'gateway_mode'
+          initialize_managed_accounts!
           initialize_order_handling!   unless old_workflowstate != "account_based_orderflow"
         end
       end
+    rescue Errno::ECONNRESET, Errno::ECONNREFUSED, Errno::EHOSTUNREACH, IB::Error => e
+      logger.error "Reconnect failed: #{e.message}. Will retry on next socket error."
     end
 
 
