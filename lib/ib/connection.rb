@@ -223,8 +223,20 @@ module IB
       @connected = false
     end
 
-
     public
+
+    # Close connection without going through the workflow state machine.
+    # Use this when the workflow state may not allow disconnect! (e.g., after
+    # a failed try_connection! where the state is still virgin).
+    def force_disconnect
+      disconnect
+    rescue => e
+      # If disconnect fails, ensure socket is closed and state is clean
+      socket&.close rescue nil
+      @connected = false
+      @reader_running = false
+      raise
+    end
 
     # disconnect and restart communication with the tws.
     #
