@@ -85,6 +85,7 @@ module IB
       client_version: IB::Messages::CLIENT_VERSION, # lib/ib/server_versions.rb
       optional_capacities: "", # TWS-Version 974: "+PACEAPI"
       plugins: [],
+      auto_reconnect: true, # When false, socket errors mark connection dead instead of auto-reconnecting
       #server_version: IB::Messages::SERVER_VERSION, # lib/messages.rb
       **any_other_parameters_which_are_ignored
     # V 974 release motes
@@ -161,18 +162,22 @@ module IB
         logger.info { "Got next valid order id: #{@next_local_id}." }
       end
 
-			retries = 5
-			begin
-				self.socket = IB::Socket.open(@host, @port)
-			rescue Errno::ECONNREFUSED, Errno::EHOSTUNREACH => e
-				if (retries -= 1) > 0
-					logger.warn "Connection refused, retrying in 10 seconds (#{retries} retries left)..."
-					sleep 10
-					retry
-				else
-					logger.error "Connection failed after multiple retries: #{e.message}"
-					raise
+			if @auto_reconnect
+				retries = 5
+				begin
+					self.socket = IB::Socket.open(@host, @port)
+				rescue Errno::ECONNREFUSED, Errno::EHOSTUNREACH => e
+					if (retries -= 1) > 0
+						logger.warn "Connection refused, retrying in 10 seconds (#{retries} retries left)..."
+						sleep 10
+						retry
+					else
+						logger.error "Connection failed after multiple retries: #{e.message}"
+						raise
+					end
 				end
+			else
+				self.socket = IB::Socket.open(@host, @port)
 			end
       socket.initialising_handshake
       @parser =  RawMessageParser.new socket
@@ -451,9 +456,15 @@ module IB
       message.send_to socket
       end
       rescue Errno::EPIPE
-        logger.error{ "Broken Pipe, trying to reconnect"  }
-        reconnect
-        retry
+        if @auto_reconnect
+          logger.error{ "Broken Pipe, trying to reconnect"  }
+          reconnect
+          retry
+        else
+          logger.error{ "Broken Pipe"  }
+          @connected = false
+          raise
+        end
       end
       ## return the transmitted message
       message.data[:request_id].presence || true
@@ -510,18 +521,28 @@ module IB
             # this error is raised if the socket is closed (recvfrom returns nil)
             # a daily reset of the TWS is a typical reason for this
             if e.message.include?("undefined method '[]' for nil")
-              logger.info "Socket read error. Connection likely closed by TWS. Reconnecting."
               @reader_running = false
-              Thread.new{ reconnect }
+              if @auto_reconnect
+                logger.info "Socket read error. Connection likely closed by TWS. Reconnecting."
+                Thread.new{ reconnect }
+              else
+                logger.info "Socket read error. Connection likely closed by TWS."
+                @connected = false
+              end
             else
               # re-raise other NoMethodErrors
               raise e
             end
           rescue Errno::ECONNRESET => e
-            logger.fatal "Connection reset. Reconnecting."
-            logger.fatal e.message
             @reader_running = false
-            Thread.new{ reconnect }
+            if @auto_reconnect
+              logger.fatal "Connection reset. Reconnecting."
+              logger.fatal e.message
+              Thread.new{ reconnect }
+            else
+              logger.fatal "Connection reset: #{e.message}"
+              @connected = false
+            end
           end
         end
       end
